@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from caelestia.utils.paths import compute_hash, scheme_cache_dir, wallpaper_thumbnail_path
+from caelestia.utils.paths import compute_hash, scheme_cache_dir
 
 
 def get_score_for_image(image: Path | str, cache_base: Path):
@@ -24,12 +24,7 @@ def get_score_for_image(image: Path | str, cache_base: Path):
     return s
 
 
-def get_colours_for_image(image: Path | str = wallpaper_thumbnail_path, scheme=None) -> dict[str, str]:
-    if scheme is None:
-        from caelestia.utils.scheme import get_scheme
-
-        scheme = get_scheme()
-
+def get_colours_for_image(image: Path | str, scheme) -> dict[str, str]:
     cache_base = scheme_cache_dir / compute_hash(image)
     cache = (cache_base / scheme.variant / scheme.flavour / scheme.mode).with_suffix(".json")
 
