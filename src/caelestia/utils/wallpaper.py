@@ -2,7 +2,7 @@ import json
 import os
 import random
 import subprocess
-from argparse import Namespace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -11,18 +11,30 @@ from materialyoucolor.utils.color_utils import argb_from_rgb
 from PIL import Image
 
 from caelestia.utils.colourfulness import get_variant
-from caelestia.utils.hypr import message
 from caelestia.utils.material import get_colours_for_image
+from caelestia.utils.monitors import get_monitor_sizes
 from caelestia.utils.paths import (
     compute_hash,
-    get_config,
+    user_config_path,
     wallpaper_link_path,
     wallpaper_path_path,
     wallpaper_thumbnail_path,
     wallpapers_cache_dir,
 )
-from caelestia.utils.scheme import Scheme, get_scheme
-from caelestia.utils.theme import apply_colours
+
+
+@dataclass
+class Scheme:
+    mode: str = "dark"
+    variant: str = "tonalspot"
+    flavour: str = "default"
+
+
+def get_config() -> dict:
+    try:
+        return json.loads(user_config_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def is_valid_image(path: Path) -> bool:
@@ -42,20 +54,19 @@ def get_wallpaper() -> str | None:
         return None
 
 
-def get_wallpapers(args: Namespace) -> list[Path]:
-    directory = Path(args.random)
+def get_wallpapers(directory: Path | str, no_filter: bool, threshold: float) -> list[Path]:
+    directory = Path(directory)
     if not directory.is_dir():
         return []
 
     walls = [f for f in directory.rglob("*") if is_valid_image(f)]
 
-    if args.no_filter:
+    monitors = None if no_filter else get_monitor_sizes()
+    if not monitors:
         return walls
 
-    monitors = cast(list[dict[str, int]], message("monitors"))
-    filter_size = min(m["width"] for m in monitors), min(m["height"] for m in monitors)
-
-    return [f for f in walls if check_wall(f, filter_size, args.threshold)]
+    filter_size = min(w for w, _ in monitors), min(h for _, h in monitors)
+    return [f for f in walls if check_wall(f, filter_size, threshold)]
 
 
 def get_thumb(wall: Path, cache: Path) -> Path:
@@ -98,9 +109,9 @@ def get_smart_opts(wall: Path, cache: Path) -> dict:
     return opts
 
 
-def get_colours_for_wall(wall: Path | str, no_smart: bool) -> None:
+def get_colours_for_wall(wall: Path | str, no_smart: bool) -> dict:
     wall = Path(wall)
-    scheme = get_scheme()
+    scheme = Scheme()
     cache = wallpapers_cache_dir / compute_hash(wall)
 
     if wall.suffix.lower() == ".gif":
@@ -110,15 +121,7 @@ def get_colours_for_wall(wall: Path | str, no_smart: bool) -> None:
 
     if not no_smart:
         smart_opts = get_smart_opts(wall, cache)
-        scheme = Scheme(
-            {
-                "name": name,
-                "flavour": scheme.flavour,
-                "mode": smart_opts["mode"],
-                "variant": smart_opts["variant"],
-                "colours": scheme.colours,
-            }
-        )
+        scheme = Scheme(mode=smart_opts["mode"], variant=smart_opts["variant"], flavour=scheme.flavour)
 
     return {
         "name": name,
@@ -172,17 +175,15 @@ def set_wallpaper(wall: Path, no_smart: bool) -> None:
     wallpaper_thumbnail_path.unlink(missing_ok=True)
     wallpaper_thumbnail_path.symlink_to(thumb)
 
-    scheme = get_scheme()
+    scheme = Scheme()
 
     # Change mode and variant based on wallpaper colour
-    if scheme.name == "dynamic" and not no_smart:
+    if not no_smart:
         smart_opts = get_smart_opts(wall_cache, cache)
         scheme.mode = smart_opts["mode"]
         scheme.variant = smart_opts["variant"]
 
-    # Update colours
-    scheme.update_colours()
-    apply_colours(scheme.colours, scheme.mode)
+    colours = get_colours_for_image(thumb, scheme)
 
     # Run custom post-hook if configured
     cfg = get_config().get("wallpaper", {})
@@ -193,19 +194,19 @@ def set_wallpaper(wall: Path, no_smart: bool) -> None:
             env={
                 **os.environ,
                 "WALLPAPER_PATH": str(wall),
-                "SCHEME_NAME": scheme.name,
+                "SCHEME_NAME": "dynamic",
                 "SCHEME_FLAVOUR": scheme.flavour,
                 "SCHEME_MODE": scheme.mode,
                 "SCHEME_VARIANT": scheme.variant,
-                "SCHEME_COLOURS": json.dumps(scheme.colours),
+                "SCHEME_COLOURS": json.dumps(colours),
                 "THUMBNAIL_PATH": str(thumb),
             },
             stderr=subprocess.DEVNULL,
         )
 
 
-def set_random(args: Namespace) -> None:
-    wallpapers = get_wallpapers(args)
+def set_random(directory: Path | str, no_filter: bool, threshold: float, no_smart: bool) -> None:
+    wallpapers = get_wallpapers(directory, no_filter, threshold)
 
     if not wallpapers:
         raise ValueError("No valid wallpapers found")
@@ -219,4 +220,4 @@ def set_random(args: Namespace) -> None:
     except (FileNotFoundError, ValueError):
         pass
 
-    set_wallpaper(random.choice(wallpapers), args.no_smart)
+    set_wallpaper(random.choice(wallpapers), no_smart)
